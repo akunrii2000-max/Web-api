@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MikuAI API</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:#0b0c10; --bg1:#111218; --bg2:#1a1b24; --bg3:#21222e;
+      --border:rgba(255,255,255,0.07); --border2:rgba(255,255,255,0.13);
+      --accent:#6366f1; --accent2:#818cf8; --glow:rgba(99,102,241,0.4);
+      --t1:#eceef5; --t2:#9ca3af; --t3:#5b6275; --green:#4ade80;
+      --mono:'JetBrains Mono',monospace; --sans:'Outfit',system-ui,sans-serif;
+      --r:10px;
+    }
+    html,body{height:100%;background:var(--bg);color:var(--t1);font-family:var(--sans);overflow-x:hidden}
+    body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(99,102,241,0.035) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,0.035) 1px,transparent 1px);background-size:52px 52px;pointer-events:none;z-index:0}
+    .orb{position:fixed;border-radius:50%;filter:blur(110px);pointer-events:none;z-index:0}
+    .orb-1{width:700px;height:700px;top:-250px;left:-250px;background:radial-gradient(circle,rgba(99,102,241,0.14) 0%,transparent 70%);animation:oF1 9s ease-in-out infinite}
+    .orb-2{width:550px;height:550px;bottom:-150px;right:-150px;background:radial-gradient(circle,rgba(139,92,246,0.11) 0%,transparent 70%);animation:oF1 11s ease-in-out infinite reverse}
+    @keyframes oF1{0%,100%{transform:translateY(0)}50%{transform:translateY(-32px)}}
+    main{position:relative;z-index:1;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3rem 1.5rem;text-align:center}
+    .badge{display:inline-flex;align-items:center;gap:.5rem;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:999px;padding:.35rem 1rem;font-family:var(--mono);font-size:.68rem;color:var(--accent2);letter-spacing:.08em;text-transform:uppercase;margin-bottom:2rem;opacity:0;animation:fU .65s cubic-bezier(.22,1,.36,1) .1s forwards;backdrop-filter:blur(8px)}
+    .badge-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:blink 2s ease infinite}
+    @keyframes blink{0%,100%{opacity:1;box-shadow:0 0 8px var(--green)}50%{opacity:.5;box-shadow:0 0 3px var(--green)}}
+    h1{font-size:clamp(3.2rem,11vw,7rem);font-weight:900;line-height:1;letter-spacing:-.045em;color:var(--t1);margin-bottom:1.25rem;opacity:0;animation:fU .65s cubic-bezier(.22,1,.36,1) .22s forwards}
+    .accent{background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 50%,#c4b5fd 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 28px rgba(99,102,241,.55))}
+    p.desc{max-width:500px;font-size:1.05rem;line-height:1.72;color:var(--t2);margin-bottom:2.5rem;opacity:0;animation:fU .65s cubic-bezier(.22,1,.36,1) .34s forwards;font-weight:400}
+    .buttons{display:flex;gap:.75rem;flex-wrap:wrap;justify-content:center;opacity:0;animation:fU .65s cubic-bezier(.22,1,.36,1) .46s forwards}
+    .btn{display:inline-flex;align-items:center;gap:.5rem;padding:.72rem 1.65rem;border-radius:var(--r);font-family:var(--sans);font-size:.9rem;font-weight:600;text-decoration:none;letter-spacing:-.01em;transition:all .2s cubic-bezier(.22,1,.36,1);cursor:pointer;border:none}
+    .btn-primary{background:var(--accent);color:#fff;box-shadow:0 0 0 1px rgba(99,102,241,.45),0 4px 24px var(--glow)}
+    .btn-primary:hover{background:#4f52e4;box-shadow:0 0 0 1px rgba(99,102,241,.7),0 8px 36px rgba(99,102,241,.55);transform:translateY(-2px)}
+    .btn-secondary{background:var(--bg2);color:var(--t2);border:1px solid var(--border2)}
+    .btn-secondary:hover{color:var(--t1);border-color:rgba(255,255,255,.22);background:var(--bg3);transform:translateY(-2px);box-shadow:0 4px 20px rgba(0,0,0,.35)}
+    .stats{display:flex;margin-top:4rem;flex-wrap:wrap;justify-content:center;opacity:0;animation:fU .65s cubic-bezier(.22,1,.36,1) .58s forwards;background:var(--bg1);border:1px solid var(--border);border-radius:14px;overflow:hidden;box-shadow:0 0 0 1px var(--border),0 8px 48px rgba(0,0,0,.45)}
+    .stat{display:flex;flex-direction:column;align-items:center;gap:.28rem;padding:1.3rem 2.6rem;position:relative;transition:background .2s}
+    .stat:hover{background:var(--bg2)}
+    .stat:not(:last-child)::after{content:'';position:absolute;right:0;top:20%;height:60%;width:1px;background:var(--border)}
+    .stat-value{font-family:var(--mono);font-size:1.5rem;font-weight:700;color:var(--accent2);letter-spacing:-.03em}
+    .stat-label{font-size:.64rem;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;font-weight:600}
+    .code-row{margin-top:2.75rem;opacity:0;animation:fU .65s cubic-bezier(.22,1,.36,1) .7s forwards}
+    .code-pill{display:inline-flex;align-items:center;gap:.75rem;background:var(--bg1);border:1px solid var(--border);border-radius:var(--r);padding:.62rem 1.15rem;font-family:var(--mono);font-size:.75rem;color:var(--t3);box-shadow:0 4px 24px rgba(0,0,0,.3);transition:border-color .2s}
+    .code-pill:hover{border-color:var(--border2)}
+    .method{font-size:.62rem;font-weight:700;color:#000;background:#4ade80;padding:.14rem .45rem;border-radius:4px;letter-spacing:.04em}
+    .code-pill code{color:var(--accent2);font-weight:500}
+    .copy-btn{background:none;border:none;cursor:pointer;color:var(--t3);padding:0;display:flex;align-items:center;transition:color .15s}
+    .copy-btn:hover{color:var(--accent2)}
+    .footnote{margin-top:2rem;opacity:0;animation:fU .65s cubic-bezier(.22,1,.36,1) .82s forwards;font-size:.72rem;color:var(--t3);font-family:var(--mono)}
+    @keyframes fU{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:translateY(0)}}
+    @media(max-width:540px){
+      .stats{flex-direction:column}
+      .stat::after{display:none}
+      .stat{border-bottom:1px solid var(--border);padding:.9rem 1.5rem;flex-direction:row;justify-content:space-between}
+      .stat:last-child{border-bottom:none}
+      .code-pill{font-size:.68rem;flex-wrap:wrap}
+      .btn{justify-content:center}
+      .buttons{width:100%;max-width:300px;flex-direction:column}
+    }
+  </style>
+</head>
+<body>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+
+  <main>
+    <div class="badge">
+      <span class="badge-dot"></span>
+      REST API · v2 · Live
+    </div>
+
+    <h1>Miku<span class="accent">AI</span></h1>
+
+    <p class="desc">
+      Platform API modular untuk kebutuhan AI, konten, downloader, dan banyak lagi —
+      dibangun dengan latensi rendah dan struktur endpoint yang rapi.
+    </p>
+
+    <div class="buttons">
+      <a href="/docs" class="btn btn-primary">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+        Dokumentasi
+      </a>
+      <a href="/docs" class="btn btn-secondary">
+        <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        Lihat Endpoint
+      </a>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-value" id="ep-count">—</span>
+        <span class="stat-label">Endpoints</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value">15</span>
+        <span class="stat-label">Req / Menit</span>
+      </div>
+    </div>
+
+    <div class="code-row">
+      <div class="code-pill">
+        <span class="method">GET</span>
+        <code>/api/random/neko?apikey=YOUR_KEY</code>
+        <button class="copy-btn" onclick="copyUrl()" title="Salin URL">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <p class="footnote">Free tier · 15 req/menit per IP · JSON response</p>
+  </main>
+
+  <script>
+    fetch('/api/endpoints')
+      .then(r => r.json())
+      .then(d => { if (d.ok) document.getElementById('ep-count').textContent = d.total; })
+      .catch(() => {});
+
+    function copyUrl() {
+      const url = window.location.origin + '/api/random/neko?apikey=YOUR_KEY';
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        btn.innerHTML = '<svg width="13" height="13" fill="none" stroke="#4ade80" stroke-width="2.5" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
+        setTimeout(() => {
+          btn.innerHTML = '<svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+        }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>
