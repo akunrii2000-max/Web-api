@@ -171,7 +171,7 @@ router.post('/api/search/preset-am', asyncHandler(handle));
 
 router.metadata = {
   name: 'Preset Alight Motion',
-  path: '/api/stalk/preset-am',
+  path: '/api/search/preset-am',
   methods: ['GET', 'POST'],
   category: 'STALK',
   description: 'Ekstrak link preset Alight Motion dari link video, atau cari lewat kata kunci.',
