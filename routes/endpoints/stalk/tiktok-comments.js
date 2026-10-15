@@ -2,254 +2,193 @@
 
 const { Router } = require('express');
 const axios = require('axios');
-const { asyncHandler, ValidationError, validate } = require('../../../utils/validation');
+const { asyncHandler, ValidationError } = require('../../../utils/validation');
 const { sendSuccessResponse } = require('../../../config/apikeyConfig');
 
 const router = Router();
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36';
-const PAGE = 50;
-const MAX_PAGES = 200;
-const MAX_REPLY_PAGES = 50;
-const MAX_REPLY_REQUESTS = 500;
-const TIME_BUDGET_MS = 100000;
+const BASE = 'https://amfinder.web.id/api';
+const MAX_TRY = 5;
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-
-async function sget(url, { headers = {}, retries = 0, timeout = 25000 } = {}) {
-  let lastErr;
-  for (let i = 0; i <= retries; i++) {
-    try {
-      const res = await axios.get(url, {
-        headers,
-        timeout,
-        maxRedirects: 5,
-        validateStatus: () => true,
-        responseType: 'text',
-        transformResponse: [(d) => d],
-      });
-      if (res.status >= 500 && i < retries) {
-        await sleep(500 * (i + 1));
-        continue;
-      }
-      return {
-        status: res.status,
-        url: res.request?.res?.responseUrl || url,
-        json: () => JSON.parse(res.data),
-      };
-    } catch (e) {
-      lastErr = e;
-      if (i < retries) await sleep(500 * (i + 1));
-    }
+function parseSSE(text) {
+  const events = [];
+  let event = 'message';
+  let data = [];
+  const flush = () => {
+    if (data.length) events.push({ event, data: data.join('\n') });
+    event = 'message';
+    data = [];
+  };
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) data.push(line.slice(5).trim());
+    else if (!line.trim()) flush();
   }
-  throw lastErr;
+  flush();
+  return events;
 }
 
-function apiUrl(path, params) {
-  const query = new URLSearchParams({
-    aid: '1988',
-    app_language: 'en',
-    device_id: String(Math.floor(1e18 + Math.random() * 8e18)),
-    browser_language: 'en-US',
-    browser_platform: 'Win32',
-    browser_name: 'Mozilla',
-    browser_version: '5.0',
-    screen_width: '1920',
-    screen_height: '1080',
-    webcast_language: 'en',
-    channel: 'web',
-    count: String(PAGE),
-    ...params,
-  });
-  return `https://www.tiktok.com/api/comment/${path}/?${query}`;
-}
-
-async function fetchPage(url) {
+async function fetchEvents(url, timeout, maxBytes) {
   try {
-    const r = await sget(url, {
-      headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://www.tiktok.com/' },
-      retries: 2,
+    const r = await axios.get(url, {
+      timeout,
+      responseType: 'text',
+      maxContentLength: maxBytes,
+      validateStatus: (s) => s >= 200 && s < 300,
     });
-    if (r.status !== 200) return { ok: false, msg: `HTTP ${r.status}` };
-    const j = r.json();
-    if (j.status_code !== 0) return { ok: false, msg: `status_code ${j.status_code}` };
-    return {
-      ok: true,
-      comments: j.comments || [],
-      hasMore: !!j.has_more,
-      cursor: num(j.cursor),
-      total: num(j.total),
+    return parseSSE(r.data);
+  } catch {
+    throw new ValidationError('Gagal menghubungi sumber data.', 502);
+  }
+}
+
+function parseJSON(text, message) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new ValidationError(message, 502);
+  }
+}
+
+async function searchVideos(q, limit) {
+  const events = await fetchEvents(`${BASE}/search?mode=pick&q=${encodeURIComponent(q)}`, 60000, 2 * 1024 * 1024);
+  const candidates = events.find((e) => e.event === 'candidates');
+  if (!candidates) throw new ValidationError('Respons kandidat sumber tidak valid.', 502);
+
+  const payload = parseJSON(candidates.data, 'Respons kandidat sumber tidak valid.');
+  const items = Array.isArray(payload.items) ? payload.items.slice(0, limit) : [];
+  if (!items.length) throw new ValidationError(`Tidak ada video untuk "${q}".`, 404);
+
+  const resultEvent = events.find((e) => e.event === 'result');
+  let meta = {};
+  if (resultEvent) {
+    try { meta = JSON.parse(resultEvent.data); } catch {}
+  }
+
+  return {
+    mode: 'search',
+    query: q,
+    total: meta.candidates ?? items.length,
+    found: meta.foundCount ?? 0,
+    elapsedMs: meta.elapsedMs ?? null,
+    fromCache: meta.fromCache ?? null,
+    result: items.map((x) => ({
+      url: x.url || null,
+      handle: x.handle || null,
+      kind: x.kind || null,
+      snippet: x.snippet ? String(x.snippet).slice(0, 180) : null,
+      thumb: x.thumb || null,
+      duration: x.duration ?? null,
+      stats: x.stats || null,
+    })),
+  };
+}
+
+async function findPresets(url) {
+  const events = await fetchEvents(`${BASE}/find?url=${encodeURIComponent(url)}`, 90000, 4 * 1024 * 1024);
+  const resultEvent = events.find((e) => e.event === 'result');
+  if (!resultEvent) throw new ValidationError('Respons sumber tidak valid.', 502);
+
+  const data = parseJSON(resultEvent.data, 'Respons sumber tidak valid.');
+  if (!data.ok) throw new ValidationError(data.error || 'Pencarian preset gagal.', 502);
+
+  const presetLinks = (Array.isArray(data.presetLinks) ? data.presetLinks : []).map((x) => ({
+    type: x.type || null,
+    url: x.url || null,
+    title: x.title || null,
+    size: x.size || null,
+    ratio: x.ratio || null,
+    source: x.source || null,
+    detail: x.detail || null,
+    verified: !!x.verified,
+    thumb: x.thumb || (Array.isArray(x.thumbs) ? x.thumbs[0] : null) || null,
+  }));
+
+  return {
+    mode: 'url',
+    found: !!data.found,
+    creator: data.author || null,
+    videoUrl: data.videoUrl || url,
+    context: data.context || null,
+    scanned: data.scanned || null,
+    total: presetLinks.length,
+    presetLinks,
+    authorDetail: data.authorDetail || null,
+    video: data.video
+      ? {
+          id: data.video.id || null,
+          url: data.video.url || null,
+          description: data.video.description ? String(data.video.description).slice(0, 500) : null,
+          stats: data.video.stats || null,
+          playUrlNoWm: data.video.playUrlNoWm || null,
+        }
+      : null,
+    otherLinks: Array.isArray(data.otherLinks) ? data.otherLinks : [],
+  };
+}
+
+async function autoSearch(q, limit) {
+  const searched = await searchVideos(q, limit);
+  const candidates = searched.result.filter((c) => c.url).slice(0, MAX_TRY);
+  let fallback = null;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    let found;
+    try { found = await findPresets(c.url); } catch { continue; }
+
+    const out = {
+      ...found,
+      mode: 'auto-search',
+      query: q,
+      selectedUrl: c.url,
+      selectedHandle: c.handle,
+      totalCandidates: searched.total,
+      tried: i + 1,
     };
-  } catch (e) {
-    return { ok: false, msg: e.message };
-  }
-}
-
-async function resolveAwemeId(input) {
-  const hit = (id, src) => ({ id, username: (String(src || '').match(/@([^/?#]+)/) || [])[1] || null });
-
-  if (/^\d{6,}$/.test(input)) return hit(input);
-
-  let url;
-  try { url = new URL(input); } catch { return null; }
-  if (!/^https?:$/.test(url.protocol) || !/(^|\.)tiktok\.com$/i.test(url.hostname)) return null;
-
-  const direct = url.pathname.match(/\/(?:video|photo|embed\/v2)\/(\d{6,})/);
-  if (direct) return hit(direct[1], url.pathname);
-
-  try {
-    const r = await sget(url.href, { headers: { 'User-Agent': UA }, retries: 1, timeout: 20000 });
-    const m = r.url.match(/\/(?:video|photo)\/(\d{6,})/);
-    if (m) return hit(m[1], r.url);
-  } catch {}
-
-  try {
-    const r = await sget(`https://www.tiktok.com/oembed?url=${encodeURIComponent(input)}`, {
-      headers: { 'User-Agent': UA, Accept: 'application/json' },
-      timeout: 20000,
-    });
-    if (r.status === 200) {
-      const j = r.json();
-      const id = /^\d{6,}$/.test(j.embed_product_id) ? j.embed_product_id : (String(j.html || '').match(/data-video-id="(\d{6,})"/) || [])[1];
-      if (id) return hit(id, j.author_url);
-    }
-  } catch {}
-
-  return null;
-}
-
-function normalize(c) {
-  const u = c.user || {};
-  const t = num(c.create_time);
-  const images = (c.image_list || []).map((x) => x.url_list?.[0] || x.url).filter(Boolean);
-  return {
-    id: c.cid || null,
-    author: u.nickname || '',
-    username: u.unique_id || '',
-    verified: !!(u.custom_verify || u.enterprise_verify_reason),
-    text: c.text || '',
-    likes: num(c.digg_count),
-    replies_count: num(c.reply_comment_total),
-    reply_to_id: c.reply_id && c.reply_id !== '0' ? c.reply_id : null,
-    created_at: t > 0 ? new Date(t * 1000).toISOString() : null,
-    language: c.comment_language || null,
-    is_pinned: !!c.author_pin,
-    avatar: u.avatar_thumb?.url_list?.[0] || null,
-    images: images.length ? images : null,
-    replies: [],
-  };
-}
-
-async function scrapeComments(input, { withReplies, limit }) {
-  const target = await resolveAwemeId(input);
-  if (!target) throw new ValidationError('URL TikTok tidak valid. Gunakan URL video TikTok atau aweme_id.', 400);
-
-  const awemeId = target.id;
-  const deadline = Date.now() + TIME_BUDGET_MS;
-  const comments = [];
-  let total = 0;
-  let timedOut = false;
-  let error = null;
-
-  for (let page = 0, cursor = 0; page < MAX_PAGES && comments.length < limit; page++) {
-    if (Date.now() > deadline) { timedOut = true; break; }
-    const p = await fetchPage(apiUrl('list', { aweme_id: awemeId, cursor }));
-    if (!p.ok) { error = p.msg; break; }
-    if (page === 0) total = p.total;
-    for (const c of p.comments) {
-      if (comments.length >= limit) break;
-      comments.push(normalize(c));
-    }
-    if (!p.hasMore || !p.comments.length) break;
-    cursor = p.cursor;
-    await sleep(250);
+    if (found.found && found.presetLinks.length) return out;
+    if (!fallback) fallback = out;
   }
 
-  if (!comments.length) {
-    throw error
-      ? new ValidationError(`Gagal mengambil komentar (${error}).`, 502)
-      : new ValidationError('Tidak ada komentar ditemukan.', 404);
-  }
-
-  if (withReplies) {
-    let requests = 0;
-    outer: for (const c of comments) {
-      if (!c.replies_count) continue;
-      for (let page = 0, cursor = 0; page < MAX_REPLY_PAGES; page++) {
-        if (requests >= MAX_REPLY_REQUESTS) break outer;
-        if (Date.now() > deadline) { timedOut = true; break outer; }
-        const p = await fetchPage(apiUrl('list/reply', { item_id: awemeId, comment_id: c.id, cursor }));
-        requests++;
-        if (!p.ok) break;
-        for (const raw of p.comments) c.replies.push({ ...normalize(raw), parent_id: c.id });
-        if (!p.hasMore || !p.comments.length) break;
-        cursor = p.cursor;
-        await sleep(250);
-      }
-    }
-  }
-
-  const totalReplies = comments.reduce((n, c) => n + c.replies.length, 0);
-  const reachedLimit = Number.isFinite(limit) && comments.length >= limit;
-
-  return {
-    post: target.username ? `https://www.tiktok.com/@${target.username}/video/${awemeId}` : null,
-    aweme_id: awemeId,
-    total_comments: total,
-    total_replies: totalReplies,
-    count: comments.length,
-    complete: !timedOut && (total === 0 || comments.length + totalReplies >= total || reachedLimit),
-    comments,
-  };
+  return fallback || searched;
 }
 
 async function handle(req, res) {
   const src = req.method === 'POST' ? { ...req.query, ...req.body } : req.query;
-  const input = String(src.url || src.link || src.id || '').trim();
+  const input = String(src.q ?? src.url ?? src.query ?? '').trim();
+  const limit = Math.min(Math.max(parseInt(src.limit, 10) || 10, 1), 30);
 
-  const v = validate.fields({ url: input }, { url: { required: true, type: 'string' } });
-  if (!v.valid) throw new ValidationError('Parameter url wajib diisi.', 400);
+  if (!input) throw new ValidationError('Parameter q wajib diisi (link video atau kata kunci).', 400);
 
-  const rawLimit = parseInt(src.limit, 10);
-  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 10000) : Infinity;
+  if (/^https?:\/\//i.test(input)) return sendSuccessResponse(res, await findPresets(input));
 
-  sendSuccessResponse(res, await scrapeComments(input, {
-    withReplies: String(src.replies ?? '1') !== '0',
-    limit,
-  }));
+  if (input.length < 2) throw new ValidationError('Kata kunci minimal 2 karakter.', 400);
+  sendSuccessResponse(res, await autoSearch(input, limit));
 }
 
-router.get('/api/stalk/tiktok-comments', asyncHandler(handle));
-router.post('/api/stalk/tiktok-comments', asyncHandler(handle));
+router.get('/api/search/preset-am', asyncHandler(handle));
+router.post('/api/search/preset-am', asyncHandler(handle));
 
 router.metadata = {
-  name: 'TikTok Comments',
-  path: '/api/stalk/tiktok-comments',
+  name: 'Preset Alight Motion',
+  path: '/api/stalk/preset-am',
   methods: ['GET', 'POST'],
   category: 'STALK',
-  description: 'Ambil semua komentar utama dan balasan dari video TikTok.',
+  description: 'Ekstrak link preset Alight Motion dari link video, atau cari lewat kata kunci.',
   params: [
     {
-      name: 'url',
+      name: 'q',
       type: 'text',
       required: true,
-      placeholder: 'https://vt.tiktok.com/ZSbsHGSQ2/',
-      description: 'URL video TikTok atau aweme_id.',
-    },
-    {
-      name: 'replies',
-      type: 'text',
-      required: false,
-      placeholder: '1',
-      description: '1 = sertakan balasan (default), 0 = hanya komentar utama.',
+      placeholder: 'https://www.tiktok.com/@user/video/... atau kata kunci',
+      description: 'Link video TikTok/YouTube atau kata kunci. Otomatis terdeteksi.',
     },
     {
       name: 'limit',
       type: 'number',
       required: false,
-      placeholder: '100',
-      description: 'Batas komentar utama (maks 10000, default tanpa batas).',
+      placeholder: '10',
+      description: 'Maksimal video hasil pencarian (1-30), hanya untuk kata kunci.',
     },
   ],
 };
