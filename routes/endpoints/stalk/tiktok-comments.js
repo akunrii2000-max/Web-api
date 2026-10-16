@@ -9,6 +9,7 @@ const router = Router();
 
 const BASE = 'https://amfinder.web.id/api';
 const MAX_TRY = 5;
+const TIME_BUDGET_MS = 100000;
 
 function parseSSE(text) {
   const events = [];
@@ -37,8 +38,9 @@ async function fetchEvents(url, timeout, maxBytes) {
       validateStatus: (s) => s >= 200 && s < 300,
     });
     return parseSSE(r.data);
-  } catch {
-    throw new ValidationError('Gagal menghubungi sumber data.', 502);
+  } catch (e) {
+    const reason = e.response?.status ? `HTTP ${e.response.status}` : e.message;
+    throw new ValidationError(`Gagal menghubungi sumber data (${reason}).`, 502);
   }
 }
 
@@ -84,8 +86,8 @@ async function searchVideos(q, limit) {
   };
 }
 
-async function findPresets(url) {
-  const events = await fetchEvents(`${BASE}/find?url=${encodeURIComponent(url)}`, 90000, 4 * 1024 * 1024);
+async function findPresets(url, timeout = 90000) {
+  const events = await fetchEvents(`${BASE}/find?url=${encodeURIComponent(url)}`, timeout, 4 * 1024 * 1024);
   const resultEvent = events.find((e) => e.event === 'result');
   if (!resultEvent) throw new ValidationError('Respons sumber tidak valid.', 502);
 
@@ -128,21 +130,23 @@ async function findPresets(url) {
 }
 
 async function autoSearch(q, limit) {
+  const deadline = Date.now() + TIME_BUDGET_MS;
   const searched = await searchVideos(q, limit);
   const candidates = searched.result.filter((c) => c.url).slice(0, MAX_TRY);
+  const timeout = Math.max(5000, Math.min(40000, deadline - Date.now()));
+  const tasks = candidates.map((c) => findPresets(c.url, timeout).catch(() => null));
   let fallback = null;
 
   for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i];
-    let found;
-    try { found = await findPresets(c.url); } catch { continue; }
+    const found = await tasks[i];
+    if (!found) continue;
 
     const out = {
       ...found,
       mode: 'auto-search',
       query: q,
-      selectedUrl: c.url,
-      selectedHandle: c.handle,
+      selectedUrl: candidates[i].url,
+      selectedHandle: candidates[i].handle,
       totalCandidates: searched.total,
       tried: i + 1,
     };
